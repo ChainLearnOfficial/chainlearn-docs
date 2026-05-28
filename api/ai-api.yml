@@ -1,0 +1,420 @@
+openapi: 3.0.3
+info:
+  title: ChainLearn AI Service
+  description: |
+    AI microservice for content generation. Uses Cohere's language models
+    to generate course content, quiz questions, and personalized feedback.
+    This service is called internally by chainlearn-api and is not
+    exposed to the public internet.
+  version: 1.0.0
+  contact:
+    name: ChainLearn AI Team
+    email: ai@chainlearn.dev
+
+servers:
+  - url: http://chainlearn-ai:8000/v1
+    description: Internal service (Docker)
+  - url: http://localhost:8000/v1
+    description: Local development
+
+tags:
+  - name: Course Generation
+    description: Generate course module content
+  - name: Quiz Generation
+    description: Generate quiz questions
+  - name: Evaluation
+    description: Evaluate quiz answers and generate feedback
+  - name: Embeddings
+    description: Content embedding and similarity
+
+paths:
+  /generate/course:
+    post:
+      tags: [Course Generation]
+      summary: Generate course module content
+      description: |
+        Generates structured learning content for a course module.
+        Content is returned in Markdown format with sections, key concepts,
+        examples, and summaries.
+      operationId: generateCourseContent
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [topic, difficulty]
+              properties:
+                topic:
+                  type: string
+                  description: The module topic to generate content for
+                  example: "Soroban smart contract storage"
+                difficulty:
+                  type: string
+                  enum: [beginner, intermediate, advanced]
+                context:
+                  type: string
+                  description: Additional context about the course or prior modules
+                learning_objectives:
+                  type: array
+                  items:
+                    type: string
+                  description: Specific learning objectives to address
+                max_tokens:
+                  type: integer
+                  default: 4000
+                  maximum: 8000
+      responses:
+        "200":
+          description: Generated content
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  content:
+                    type: string
+                    description: Markdown-formatted course content
+                  key_concepts:
+                    type: array
+                    items:
+                      type: string
+                    description: Extracted key concepts for indexing
+                  estimated_read_time:
+                    type: integer
+                    description: Estimated reading time in minutes
+                  generation_id:
+                    type: string
+                    format: uuid
+                  model:
+                    type: string
+                    example: "command-r-plus"
+                  tokens_used:
+                    type: integer
+        "429":
+          description: Rate limit exceeded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RateLimitError"
+
+  /generate/quiz:
+    post:
+      tags: [Quiz Generation]
+      summary: Generate quiz questions
+      description: |
+        Generates quiz questions based on course content.
+        Questions are calibrated to the specified difficulty level
+        and cover the provided learning objectives.
+      operationId: generateQuizQuestions
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [course_content, difficulty]
+              properties:
+                course_content:
+                  type: string
+                  description: The course content to base questions on
+                difficulty:
+                  type: string
+                  enum: [beginner, intermediate, advanced]
+                question_count:
+                  type: integer
+                  default: 10
+                  minimum: 5
+                  maximum: 20
+                question_types:
+                  type: array
+                  items:
+                    type: string
+                    enum: [multiple_choice, true_false, short_answer]
+                  default: [multiple_choice, true_false]
+                topics_to_focus:
+                  type: array
+                  items:
+                    type: string
+                  description: Specific topics to emphasize in questions
+      responses:
+        "200":
+          description: Generated quiz
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  questions:
+                    type: array
+                    items:
+                      type: object
+                      required: [id, question, type, correct_answer, explanation]
+                      properties:
+                        id:
+                          type: string
+                          format: uuid
+                        question:
+                          type: string
+                          example: "What is the primary purpose of Soroban's Storage API?"
+                        type:
+                          type: string
+                          enum: [multiple_choice, true_false, short_answer]
+                        options:
+                          type: array
+                          items:
+                            type: string
+                          description: Answer options for multiple choice
+                        correct_answer:
+                          type: string
+                          description: The correct answer
+                        explanation:
+                          type: string
+                          description: Explanation of why this is correct
+                        difficulty:
+                          type: string
+                          enum: [easy, medium, hard]
+                        topic:
+                          type: string
+                  generation_id:
+                    type: string
+                    format: uuid
+                  tokens_used:
+                    type: integer
+
+  /evaluate/quiz:
+    post:
+      tags: [Evaluation]
+      summary: Evaluate quiz submission
+      description: |
+        Evaluates a learner's quiz answers and generates personalized
+        feedback for each question. Returns an overall score and
+        per-question feedback.
+      operationId: evaluateQuizSubmission
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [questions, answers]
+              properties:
+                questions:
+                  type: array
+                  items:
+                    type: object
+                  description: The original quiz questions with correct answers
+                answers:
+                  type: array
+                  items:
+                    type: object
+                    required: [question_id, answer]
+                    properties:
+                      question_id:
+                        type: string
+                      answer:
+                        type: string
+      responses:
+        "200":
+          description: Evaluation results
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  score:
+                    type: number
+                    format: float
+                    description: Overall score as percentage (0-100)
+                  passed:
+                    type: boolean
+                  results:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        question_id:
+                          type: string
+                        correct:
+                          type: boolean
+                        feedback:
+                          type: string
+                          description: Personalized explanation
+                        suggested_review:
+                          type: string
+                          description: Suggested topics to review if incorrect
+                  overall_feedback:
+                    type: string
+                    description: Summary feedback on performance
+                  weak_topics:
+                    type: array
+                    items:
+                      type: string
+                    description: Topics where the learner struggled
+                  evaluation_id:
+                    type: string
+                    format: uuid
+                  tokens_used:
+                    type: integer
+
+  /generate/feedback:
+    post:
+      tags: [Evaluation]
+      summary: Generate personalized feedback
+      description: |
+        Generates detailed, personalized feedback for a learner based on
+        their quiz performance and course content. Focuses on areas
+        for improvement with specific recommendations.
+      operationId: generateFeedback
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [course_content, quiz_results]
+              properties:
+                course_content:
+                  type: string
+                  description: The course content
+                quiz_results:
+                  type: object
+                  description: The quiz evaluation results
+                learner_context:
+                  type: string
+                  description: Additional context about the learner
+      responses:
+        "200":
+          description: Generated feedback
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  feedback:
+                    type: string
+                    description: Markdown-formatted personalized feedback
+                  recommended_modules:
+                    type: array
+                    items:
+                      type: string
+                    description: Module topics to review
+                  encouragement:
+                    type: string
+                    description: Motivational message
+                  generation_id:
+                    type: string
+                    format: uuid
+                  tokens_used:
+                    type: integer
+
+  /embed:
+    post:
+      tags: [Embeddings]
+      summary: Generate content embeddings
+      description: |
+        Generates vector embeddings for content using Cohere's embed model.
+        Used for semantic search and content similarity.
+      operationId: generateEmbeddings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [texts]
+              properties:
+                texts:
+                  type: array
+                  items:
+                    type: string
+                  maxItems: 96
+                  description: Texts to embed (batch)
+                input_type:
+                  type: string
+                  enum: [search_document, search_query, classification]
+                  default: search_document
+      responses:
+        "200":
+          description: Generated embeddings
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  embeddings:
+                    type: array
+                    items:
+                      type: array
+                      items:
+                        type: number
+                    description: 1024-dimensional embedding vectors
+                  model:
+                    type: string
+                    example: "embed-english-v3.0"
+                  tokens_used:
+                    type: integer
+
+  /similarity:
+    post:
+      tags: [Embeddings]
+      summary: Find similar content
+      description: |
+        Searches for content similar to a query using cosine similarity
+        over pre-computed embeddings.
+      operationId: findSimilarContent
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [query]
+              properties:
+                query:
+                  type: string
+                  description: Search query
+                limit:
+                  type: integer
+                  default: 10
+                  maximum: 50
+                course_id:
+                  type: string
+                  format: uuid
+                  description: Restrict search to a specific course
+      responses:
+        "200":
+          description: Similar content
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  results:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        module_id:
+                          type: string
+                          format: uuid
+                        title:
+                          type: string
+                        snippet:
+                          type: string
+                        score:
+                          type: number
+                          format: float
+                          description: Similarity score (0-1)
+
+components:
+  schemas:
+    RateLimitError:
+      type: object
+      properties:
+        error:
+          type: string
+          example: "Rate limit exceeded"
+        retry_after:
+          type: integer
+          description: Seconds until rate limit resets

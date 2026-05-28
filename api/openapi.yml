@@ -1,0 +1,720 @@
+openapi: 3.0.3
+info:
+  title: ChainLearn API
+  description: |
+    Central REST API for the ChainLearn platform. Handles authentication,
+    user management, courses, quizzes, rewards, and credential coordination.
+  version: 1.0.0
+  contact:
+    name: ChainLearn Team
+    email: api@chainlearn.dev
+  license:
+    name: MIT
+
+servers:
+  - url: https://api.chainlearn.dev/v1
+    description: Production
+  - url: https://api-testnet.chainlearn.dev/v1
+    description: Testnet
+  - url: http://localhost:3000/v1
+    description: Local development
+
+security:
+  - bearerAuth: []
+
+tags:
+  - name: Auth
+    description: SEP-10 authentication flow
+  - name: Users
+    description: User profile management
+  - name: Courses
+    description: Course catalog and enrollment
+  - name: Modules
+    description: Course module content and completion
+  - name: Quizzes
+    description: Quiz generation, submission, and scoring
+  - name: Rewards
+    description: Token reward distribution
+  - name: Credentials
+    description: On-chain credential management
+
+paths:
+  /auth/challenge:
+    post:
+      tags: [Auth]
+      summary: Request SEP-10 challenge transaction
+      description: |
+        Returns an unsigned challenge transaction that the user must sign
+        with their Stellar key. This is the first step of SEP-10 authentication.
+      operationId: authChallenge
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [account]
+              properties:
+                account:
+                  type: string
+                  description: Stellar public key (G...)
+                  example: GA2HGBJIJKIPO5RMQCT6GS5HFZDSSSZXLW6DZQXXCXRITJQ6MM
+      responses:
+        "200":
+          description: Challenge transaction
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  transaction:
+                    type: string
+                    description: Base64-encoded unsigned challenge transaction
+                  network_passphrase:
+                    type: string
+                    example: Test SDF Network ; September 2015
+        "400":
+          description: Invalid account address
+
+  /auth/verify:
+    post:
+      tags: [Auth]
+      summary: Verify signed challenge and receive JWT
+      description: |
+        Submits the signed challenge transaction. If valid, returns a JWT
+        for authenticating subsequent API requests.
+      operationId: authVerify
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [transaction]
+              properties:
+                transaction:
+                  type: string
+                  description: Base64-encoded signed challenge transaction
+      responses:
+        "200":
+          description: Authentication successful
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token:
+                    type: string
+                    description: JWT access token
+                  expires_in:
+                    type: integer
+                    description: Token TTL in seconds
+                    example: 86400
+                  user:
+                    $ref: "#/components/schemas/User"
+        "401":
+          description: Invalid signature or expired challenge
+
+  /users/me:
+    get:
+      tags: [Users]
+      summary: Get current user profile
+      operationId: getUserMe
+      responses:
+        "200":
+          description: User profile
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+    patch:
+      tags: [Users]
+      summary: Update current user profile
+      operationId: updateUserMe
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                display_name:
+                  type: string
+                  maxLength: 50
+                email:
+                  type: string
+                  format: email
+                avatar_url:
+                  type: string
+                  format: uri
+      responses:
+        "200":
+          description: Updated user profile
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+
+  /courses:
+    get:
+      tags: [Courses]
+      summary: List available courses
+      operationId: listCourses
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+            maximum: 100
+        - name: category
+          in: query
+          schema:
+            type: string
+        - name: difficulty
+          in: query
+          schema:
+            type: string
+            enum: [beginner, intermediate, advanced]
+        - name: search
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Paginated course list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/CourseSummary"
+                  pagination:
+                    $ref: "#/components/schemas/Pagination"
+
+  /courses/{courseId}:
+    get:
+      tags: [Courses]
+      summary: Get course details
+      operationId: getCourse
+      parameters:
+        - $ref: "#/components/parameters/CourseId"
+      responses:
+        "200":
+          description: Course details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Course"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /courses/{courseId}/enroll:
+    post:
+      tags: [Courses]
+      summary: Enroll in a course
+      operationId: enrollInCourse
+      parameters:
+        - $ref: "#/components/parameters/CourseId"
+      responses:
+        "201":
+          description: Enrollment created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Enrollment"
+        "409":
+          description: Already enrolled
+
+  /modules/{moduleId}:
+    get:
+      tags: [Modules]
+      summary: Get module content
+      operationId: getModule
+      parameters:
+        - $ref: "#/components/parameters/ModuleId"
+      responses:
+        "200":
+          description: Module content
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Module"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /modules/{moduleId}/complete:
+    post:
+      tags: [Modules]
+      summary: Mark module as completed
+      operationId: completeModule
+      parameters:
+        - $ref: "#/components/parameters/ModuleId"
+      responses:
+        "200":
+          description: Module completion recorded
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  module_id:
+                    type: string
+                    format: uuid
+                  completed_at:
+                    type: string
+                    format: date-time
+                  progress:
+                    type: number
+                    format: float
+                    description: Overall course progress (0.0 to 1.0)
+
+  /quizzes/generate:
+    post:
+      tags: [Quizzes]
+      summary: Generate a quiz for a course
+      operationId: generateQuiz
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [course_id]
+              properties:
+                course_id:
+                  type: string
+                  format: uuid
+                question_count:
+                  type: integer
+                  default: 10
+                  minimum: 5
+                  maximum: 20
+      responses:
+        "201":
+          description: Quiz generated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Quiz"
+
+  /quizzes/{quizId}:
+    get:
+      tags: [Quizzes]
+      summary: Get quiz details
+      operationId: getQuiz
+      parameters:
+        - $ref: "#/components/parameters/QuizId"
+      responses:
+        "200":
+          description: Quiz with questions (no answers)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Quiz"
+
+  /quizzes/{quizId}/submit:
+    post:
+      tags: [Quizzes]
+      summary: Submit quiz answers
+      operationId: submitQuiz
+      parameters:
+        - $ref: "#/components/parameters/QuizId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [answers]
+              properties:
+                answers:
+                  type: array
+                  items:
+                    type: object
+                    required: [question_id, answer]
+                    properties:
+                      question_id:
+                        type: string
+                      answer:
+                        type: string
+      responses:
+        "200":
+          description: Quiz graded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QuizResult"
+        "409":
+          description: Quiz already submitted
+
+  /rewards:
+    get:
+      tags: [Rewards]
+      summary: List user's rewards
+      operationId: listRewards
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+        - name: limit
+          in: query
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Reward list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Reward"
+                  pagination:
+                    $ref: "#/components/schemas/Pagination"
+
+  /credentials:
+    get:
+      tags: [Credentials]
+      summary: List user's credentials
+      operationId: listCredentials
+      responses:
+        "200":
+          description: Credential list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Credential"
+
+  /credentials/{credentialId}:
+    get:
+      tags: [Credentials]
+      summary: Get credential details
+      operationId: getCredential
+      security: []
+      parameters:
+        - name: credentialId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Credential details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Credential"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    CourseId:
+      name: courseId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    ModuleId:
+      name: moduleId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    QuizId:
+      name: quizId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+  responses:
+    Unauthorized:
+      description: Missing or invalid JWT
+    NotFound:
+      description: Resource not found
+
+  schemas:
+    User:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        stellar_address:
+          type: string
+          example: GA2HGBJIJKIPO5RMQCT6GS5HFZDSSSZXLW6DZQXXCXRITJQ6MM
+        display_name:
+          type: string
+          example: Alice
+        email:
+          type: string
+          format: email
+        avatar_url:
+          type: string
+          format: uri
+        created_at:
+          type: string
+          format: date-time
+
+    CourseSummary:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+          example: Introduction to Soroban
+        description:
+          type: string
+        category:
+          type: string
+          example: Blockchain
+        difficulty:
+          type: string
+          enum: [beginner, intermediate, advanced]
+        module_count:
+          type: integer
+        reward_amount:
+          type: string
+          description: LEARN token reward for completion
+          example: "100"
+        thumbnail_url:
+          type: string
+          format: uri
+
+    Course:
+      allOf:
+        - $ref: "#/components/schemas/CourseSummary"
+        - type: object
+          properties:
+            modules:
+              type: array
+              items:
+                $ref: "#/components/schemas/ModuleSummary"
+            prerequisites:
+              type: array
+              items:
+                type: string
+                format: uuid
+            created_at:
+              type: string
+              format: date-time
+            updated_at:
+              type: string
+              format: date-time
+
+    ModuleSummary:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        order:
+          type: integer
+
+    Module:
+      allOf:
+        - $ref: "#/components/schemas/ModuleSummary"
+        - type: object
+          properties:
+            content:
+              type: string
+              description: Markdown content for the module
+            content_format:
+              type: string
+              enum: [markdown, html]
+              default: markdown
+            estimated_minutes:
+              type: integer
+              description: Estimated reading time in minutes
+
+    Enrollment:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        user_id:
+          type: string
+          format: uuid
+        course_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [active, completed, dropped]
+        progress:
+          type: number
+          format: float
+          description: Completion percentage (0.0 to 1.0)
+        enrolled_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    Quiz:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        course_id:
+          type: string
+          format: uuid
+        questions:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+              question:
+                type: string
+              type:
+                type: string
+                enum: [multiple_choice, true_false, short_answer]
+              options:
+                type: array
+                items:
+                  type: string
+                description: Available options (multiple choice only)
+        created_at:
+          type: string
+          format: date-time
+
+    QuizResult:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        quiz_id:
+          type: string
+          format: uuid
+        score:
+          type: number
+          format: float
+          description: Score as percentage (0-100)
+        passed:
+          type: boolean
+        answers:
+          type: array
+          items:
+            type: object
+            properties:
+              question_id:
+                type: string
+              correct:
+                type: boolean
+              feedback:
+                type: string
+        reward_distributed:
+          type: boolean
+        credential_minted:
+          type: boolean
+        submitted_at:
+          type: string
+          format: date-time
+
+    Reward:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        user_id:
+          type: string
+          format: uuid
+        course_id:
+          type: string
+          format: uuid
+        amount:
+          type: string
+          description: LEARN token amount
+        tx_hash:
+          type: string
+          description: Stellar transaction hash
+        distributed_at:
+          type: string
+          format: date-time
+
+    Credential:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        user_id:
+          type: string
+          format: uuid
+        course_id:
+          type: string
+          format: uuid
+        course_title:
+          type: string
+        nft_id:
+          type: string
+          description: On-chain NFT identifier
+        tx_hash:
+          type: string
+          description: Stellar transaction hash
+        metadata_uri:
+          type: string
+          format: uri
+        score:
+          type: number
+          format: float
+        minted_at:
+          type: string
+          format: date-time
+
+    Pagination:
+      type: object
+      properties:
+        page:
+          type: integer
+        limit:
+          type: integer
+        total:
+          type: integer
+        total_pages:
+          type: integer

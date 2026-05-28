@@ -1,0 +1,480 @@
+openapi: 3.0.3
+info:
+  title: ChainLearn Indexer API
+  description: |
+    Read-only API for querying indexed Stellar/Soroban data. The indexer
+    subscribes to on-chain events and caches them in PostgreSQL for
+    fast, flexible querying. Data is eventually consistent (typically
+    under 30 seconds lag).
+  version: 1.0.0
+  contact:
+    name: ChainLearn Team
+    email: indexer@chainlearn.dev
+
+servers:
+  - url: https://indexer.chainlearn.dev/v1
+    description: Production
+  - url: https://indexer-testnet.chainlearn.dev/v1
+    description: Testnet
+  - url: http://localhost:3001/v1
+    description: Local development
+
+tags:
+  - name: Tokens
+    description: LearnToken transfer history and balances
+  - name: Credentials
+    description: Credential NFT queries
+  - name: Progress
+    description: Enrollment and progress tracking
+  - name: Events
+    description: Raw contract event queries
+
+paths:
+  /tokens/transfers:
+    get:
+      tags: [Tokens]
+      summary: List token transfers
+      description: Returns indexed LearnToken transfer events.
+      operationId: listTokenTransfers
+      parameters:
+        - name: from
+          in: query
+          schema:
+            type: string
+          description: Filter by sender address
+        - name: to
+          in: query
+          schema:
+            type: string
+          description: Filter by recipient address
+        - name: from_timestamp
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: to_timestamp
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+            maximum: 200
+        - name: cursor
+          in: query
+          schema:
+            type: string
+          description: Pagination cursor from previous response
+      responses:
+        "200":
+          description: Token transfer list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/TokenTransfer"
+                  next_cursor:
+                    type: string
+                    nullable: true
+
+  /tokens/balances/{address}:
+    get:
+      tags: [Tokens]
+      summary: Get token balance for address
+      operationId: getTokenBalance
+      parameters:
+        - name: address
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Stellar address
+      responses:
+        "200":
+          description: Token balance
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  address:
+                    type: string
+                  balance:
+                    type: string
+                    description: LEARN token balance in human-readable units
+                  last_updated:
+                    type: string
+                    format: date-time
+
+  /credentials:
+    get:
+      tags: [Credentials]
+      summary: List all credentials
+      description: Query minted credential NFTs with optional filters.
+      operationId: listCredentials
+      parameters:
+        - name: holder
+          in: query
+          schema:
+            type: string
+          description: Filter by holder Stellar address
+        - name: course_id
+          in: query
+          schema:
+            type: string
+          description: Filter by course identifier
+        - name: issued_after
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+        - name: cursor
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Credential list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/IndexedCredential"
+                  next_cursor:
+                    type: string
+                    nullable: true
+
+  /credentials/{credentialId}:
+    get:
+      tags: [Credentials]
+      summary: Get credential details
+      operationId: getIndexedCredential
+      parameters:
+        - name: credentialId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Credential details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IndexedCredential"
+        "404":
+          description: Credential not found
+
+  /credentials/verify/{address}:
+    get:
+      tags: [Credentials]
+      summary: Verify all credentials for an address
+      description: |
+        Returns all credentials held by a given address, along with
+        verification status for each.
+      operationId: verifyCredentials
+      parameters:
+        - name: address
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Stellar address to verify
+      responses:
+        "200":
+          description: Verification result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  address:
+                    type: string
+                  credential_count:
+                    type: integer
+                  credentials:
+                    type: array
+                    items:
+                      allOf:
+                        - $ref: "#/components/schemas/IndexedCredential"
+                        - type: object
+                          properties:
+                            verified:
+                              type: boolean
+                              description: Whether the credential is confirmed on-chain
+
+  /progress/enrollments:
+    get:
+      tags: [Progress]
+      summary: List enrollments
+      operationId: listEnrollments
+      parameters:
+        - name: user
+          in: query
+          schema:
+            type: string
+          description: Filter by user Stellar address
+        - name: course_id
+          in: query
+          schema:
+            type: string
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [active, completed]
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+      responses:
+        "200":
+          description: Enrollment list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/IndexedEnrollment"
+
+  /progress/enrollments/{enrollmentId}:
+    get:
+      tags: [Progress]
+      summary: Get enrollment details with module progress
+      operationId: getEnrollmentProgress
+      parameters:
+        - name: enrollmentId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Enrollment with module completion details
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/IndexedEnrollment"
+                  - type: object
+                    properties:
+                      modules:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            module_id:
+                              type: string
+                            title:
+                              type: string
+                            completed:
+                              type: boolean
+                            completed_at:
+                              type: string
+                              format: date-time
+                              nullable: true
+
+  /events:
+    get:
+      tags: [Events]
+      summary: Query raw contract events
+      description: |
+        Returns indexed Soroban contract events. Useful for debugging,
+        analytics, and building custom dashboards.
+      operationId: listEvents
+      parameters:
+        - name: contract_id
+          in: query
+          schema:
+            type: string
+          description: Filter by contract address
+        - name: event_type
+          in: query
+          schema:
+            type: string
+            enum: [transfer, mint, enrollment, module_completion, credential_mint]
+        - name: from_ledger
+          in: query
+          schema:
+            type: integer
+        - name: to_ledger
+          in: query
+          schema:
+            type: integer
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 100
+            maximum: 500
+        - name: cursor
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Event list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ContractEvent"
+                  next_cursor:
+                    type: string
+                    nullable: true
+
+  /stats/overview:
+    get:
+      tags: [Tokens]
+      summary: Platform statistics
+      description: Aggregate statistics for the ChainLearn platform.
+      operationId: getPlatformStats
+      responses:
+        "200":
+          description: Platform statistics
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  total_learners:
+                    type: integer
+                  total_enrollments:
+                    type: integer
+                  total_completions:
+                    type: integer
+                  total_tokens_distributed:
+                    type: string
+                  total_credentials_minted:
+                    type: integer
+                  active_courses:
+                    type: integer
+                  last_updated:
+                    type: string
+                    format: date-time
+
+components:
+  schemas:
+    TokenTransfer:
+      type: object
+      properties:
+        id:
+          type: string
+        from:
+          type: string
+          description: Sender Stellar address
+        to:
+          type: string
+          description: Recipient Stellar address
+        amount:
+          type: string
+          description: Transfer amount in human-readable units
+        tx_hash:
+          type: string
+        ledger:
+          type: integer
+        timestamp:
+          type: string
+          format: date-time
+
+    IndexedCredential:
+      type: object
+      properties:
+        id:
+          type: string
+        holder:
+          type: string
+          description: Stellar address of credential holder
+        course_id:
+          type: string
+        course_title:
+          type: string
+        score:
+          type: number
+          format: float
+        metadata_uri:
+          type: string
+          format: uri
+        tx_hash:
+          type: string
+        minted_at:
+          type: string
+          format: date-time
+        revoked:
+          type: boolean
+
+    IndexedEnrollment:
+      type: object
+      properties:
+        id:
+          type: string
+        user:
+          type: string
+          description: Stellar address of learner
+        course_id:
+          type: string
+        status:
+          type: string
+          enum: [active, completed]
+        modules_completed:
+          type: integer
+        total_modules:
+          type: integer
+        enrolled_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: string
+          format: date-time
+          nullable: true
+        tx_hash:
+          type: string
+
+    ContractEvent:
+      type: object
+      properties:
+        id:
+          type: string
+        contract_id:
+          type: string
+          description: Soroban contract address
+        event_type:
+          type: string
+        topics:
+          type: array
+          items:
+            type: string
+        data:
+          type: object
+          description: Parsed event data
+        ledger:
+          type: integer
+        tx_hash:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
