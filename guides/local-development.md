@@ -11,6 +11,38 @@ This guide walks through setting up the complete ChainLearn platform for local d
 - [Soroban CLI](https://soroban.stellar.org/docs/getting-started/setup)
 - Git
 
+## Architecture Overview
+
+ChainLearn is a multi-repo project with 7 independent packages:
+
+```
+┌──────────────┐     ┌──────────────┐     ┌──────────────┐
+│   Frontend    │────▶│   API Server │────▶│  AI Service   │
+│   (Next.js)  │◀────│   (Fastify)  │◀────│  (FastAPI)    │
+└──────┬───────┘     └──────┬───────┘     └───────────────┘
+       │                    │
+       ▼                    ▼
+┌──────────────┐     ┌──────────────┐     ┌──────────────┐
+│   Stellar    │     │  PostgreSQL  │     │   Indexer    │
+│   Network    │     │  + Redis     │     │  (Fastify)   │
+│  (Soroban)   │     └──────────────┘     └──────┬───────┘
+└──────────────┘                                 ▼
+                                         ┌──────────────┐
+                                         │   Stellar    │
+                                         │   Network    │
+                                         └──────────────┘
+```
+
+| Package | Stack | Port |
+|---|---|---|
+| chainlearn-api | Node, Fastify, TypeScript, Drizzle ORM | 3000 |
+| chainlearn-frontend | Next.js 14, Tailwind, shadcn/ui | 3000 |
+| chainlearn-ai | Python, FastAPI, Cohere | 8000 |
+| chainlearn-indexer | Node, Fastify, TypeScript | 3100 |
+| chainlearn-contracts | Rust, Soroban SDK | N/A |
+| chainlearn-infra | Terraform, Docker Compose | N/A |
+| chainlearn-docs | Markdown, OpenAPI | N/A |
+
 ## Repository Setup
 
 Clone all repositories into a workspace directory:
@@ -74,11 +106,12 @@ npm install
 cp .env.example .env
 # Edit .env with your database URL and Stellar keys
 
-# Run database migrations
-npx prisma migrate dev
+# Run database migrations (uses Drizzle ORM)
+npm run db:generate   # Generate migration SQL
+npm run db:migrate    # Run migrations
 
 # Seed the database with sample courses
-npx prisma db seed
+npm run db:seed
 
 # Start the server
 npm run dev
@@ -118,7 +151,7 @@ cp .env.example .env
 # Add your Cohere API key
 
 # Start the server
-uvicorn app.main:app --reload --port 8000
+uvicorn src.main:app --reload --port 8000
 ```
 
 **Required environment variables:**
@@ -133,8 +166,11 @@ REDIS_URL=redis://localhost:6379
 ```bash
 cd chainlearn-contracts
 
+# Install the WASM target
+rustup target add wasm32-unknown-unknown
+
 # Build contracts
-make build
+cargo build --release --target wasm32-unknown-unknown
 
 # Run tests
 cargo test
@@ -144,7 +180,7 @@ soroban keys generate deployer --network testnet
 curl "https://friendbot.stellar.org?addr=$(soroban keys address deployer)"
 
 # Deploy each contract
-make deploy-testnet
+./scripts/deploy.sh testnet
 ```
 
 ### 5. chainlearn-indexer
@@ -157,7 +193,7 @@ npm install
 cp .env.example .env
 # Configure database URL and contract addresses
 
-npx prisma migrate dev
+npm run migrate   # Run database migrations
 npm run dev
 ```
 
@@ -166,10 +202,11 @@ npm run dev
 ```env
 DATABASE_URL=postgresql://chainlearn:chainlearn@localhost:5432/chainlearn_dev
 SOROBAN_RPC_URL=https://soroban-testnet.stellar.org
-LEARN_TOKEN_ADDRESS=...
-CREDENTIAL_NFT_ADDRESS=...
-PROGRESS_TRACKER_ADDRESS=...
+LEARN_TOKEN_CONTRACT=...
+CREDENTIAL_NFT_CONTRACT=...
+PROGRESS_TRACKER_CONTRACT=...
 POLL_INTERVAL_MS=5000
+ALLOWED_ORIGINS=http://localhost:3000,http://localhost:5173
 ```
 
 ### 6. chainlearn-frontend
@@ -179,7 +216,7 @@ cd chainlearn-frontend
 
 npm install
 
-cp .env.example .env
+cp .env.example .env.local
 # Configure API URL
 
 npm run dev
@@ -188,11 +225,13 @@ npm run dev
 **Required environment variables:**
 
 ```env
-VITE_API_URL=http://localhost:3000
-VITE_STELLAR_NETWORK=testnet
+NEXT_PUBLIC_API_URL=http://localhost:3000
+NEXT_PUBLIC_STELLAR_NETWORK=testnet
 ```
 
-The frontend runs at `http://localhost:5173`.
+> **Note:** Next.js only exposes environment variables with the `NEXT_PUBLIC_` prefix to the browser. Use `.env.local` for local overrides.
+
+The frontend runs at `http://localhost:3000` (or the port shown in terminal).
 
 ## Stellar Testnet Setup
 
@@ -229,13 +268,37 @@ soroban contract invoke \
 
 ## Development Workflow
 
-### Making Changes
+### Branch Naming
+- `feature/description` — new features
+- `fix/description` — bug fixes
+- `test/description` — test additions
+- `docs/description` — documentation changes
 
-1. Create a branch: `git checkout -b feature/my-change`
-2. Make changes in the relevant repo
-3. Test locally (see below)
-4. Commit and push
-5. Open a PR
+### Commit Messages
+Follow [Conventional Commits](https://www.conventionalcommits.org/):
+- `feat: add quiz generation endpoint`
+- `fix: resolve enrollment count bug`
+- `test: add E2E tests for credentials module`
+- `docs: update local development guide`
+
+### PR Process
+1. Create a branch from `main`
+2. Make changes with tests
+3. Run lint + typecheck:
+   - API: `npm run lint && npm run typecheck`
+   - Frontend: `npm run lint`
+   - AI: `ruff check src/ tests/`
+   - Contracts: `cargo test`
+4. Push and create PR
+5. PR will trigger CI (lint, test, build)
+6. Address review feedback
+7. Squash and merge
+
+### Code Style
+- TypeScript: ESLint + Prettier (existing config)
+- Python: Ruff (line length 100)
+- Rust: `cargo fmt` + `cargo clippy`
+- Commit messages: Conventional Commits
 
 ### Running Tests
 
@@ -249,8 +312,8 @@ cd chainlearn-ai && pytest
 # Contract tests
 cd chainlearn-contracts && cargo test
 
-# Frontend tests
-cd chainlearn-frontend && npm test
+# Frontend — no test script; run lint instead
+cd chainlearn-frontend && npm run lint
 
 # Integration tests (requires all services running)
 cd chainlearn-infra && docker compose -f docker-compose.test.yml up
@@ -261,8 +324,9 @@ cd chainlearn-infra && docker compose -f docker-compose.test.yml up
 **Reset the database:**
 ```bash
 cd chainlearn-api
-npx prisma migrate reset
-npx prisma db seed
+npm run db:generate
+npm run db:migrate
+npm run db:seed
 ```
 
 **Clear Redis cache:**
@@ -305,11 +369,26 @@ docker compose logs postgres
 - Check WASM size: `ls -la target/wasm32-unknown-unknown/release/*.wasm`
 - Verify network: `soroban network ls`
 
+### "Module not found" errors in contracts
+
+Ensure the WASM target is installed:
+```bash
+rustup target add wasm32-unknown-unknown
+```
+
 ### AI Service Errors
 
-- Verify your Cohere API key is valid
+- Verify your Cohere API key is valid and has quota:
+  ```bash
+  curl -H "Authorization: Bearer $COHERE_API_KEY" https://api.cohere.ai/v1/models
+  ```
 - Check Redis is running (AI service uses it for caching)
 - Look at logs: `docker compose logs chainlearn-ai`
+
+### Frontend can't connect to API
+
+Check that `NEXT_PUBLIC_API_URL` is set in `.env.local` (not `.env`).
+Next.js only exposes env vars with `NEXT_PUBLIC_` prefix to the browser.
 
 ## IDE Setup
 
@@ -319,7 +398,7 @@ Recommended extensions:
 - rust-analyzer (for contracts)
 - Python (for AI service)
 - ESLint + Prettier (for API and frontend)
-- Prisma (for database schema)
+- Drizzle ORM (for database schema)
 - Soroban (for contract development)
 
 ### Workspace Settings
