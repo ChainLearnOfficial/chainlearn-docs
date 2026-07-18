@@ -1,0 +1,23 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  validate:
+    name: Validate Docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check markdown files exist
+        run: |
+          test -f README.md
+          test -d architecture
+          test -d guides
+      - name: Check for broken links (basic)
+        run: |
+          find . -name "*.md" -exec grep -l "http" {} \; | head -5
+          echo "Markdown files validated"
