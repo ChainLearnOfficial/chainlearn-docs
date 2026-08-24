@@ -47,3 +47,9 @@ New to ChainLearn? Start here:
 ## License
 
 Documentation is licensed under CC BY 4.0. Code examples are MIT licensed.
+
+## Quick start
+
+1. Clone this repository.
+2. Install prerequisites from project files.
+3. Build and run the project's standard tests.
